@@ -1,0 +1,5 @@
+services:
+  catalog-service:
+    build: ./catalog-service
+    ports:
+      - "8000:8000"
