@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Sequence
+
+from fastapi import APIRouter, Depends
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+{{ imports }}
+
+API_TITLE = {{ info.title.__repr__() }}
+API_VERSION = {{ info.version.__repr__() }}
+
+
+class MarketplaceApi(ABC):
+    """Server interface generated from the OpenAPI spec: one method per operationId."""
+{% for operation in operations %}
+{% set secured = operation.security != [] %}
+
+    @abstractmethod
+    def {{ operation.function_name }}(self{% if operation.snake_case_arguments %}, {{ operation.snake_case_arguments }}{% endif %}{% if secured %}, *, principal: Any{% endif %}) -> {{ operation.response }}:
+        """{{ operation.summary }}"""
+{% endfor %}
+
+
+def _render(result: BaseModel, status_code: int) -> JSONResponse:
+    # Python-mode dump + jsonable_encoder keeps `format: decimal` values as JSON numbers.
+    return JSONResponse(status_code=status_code, content=jsonable_encoder(result.model_dump()))
+
+
+def create_router(
+    impl: MarketplaceApi,
+    authenticate: Callable[..., Any],
+    require_roles: Callable[[Sequence[str]], Callable[..., Any]],
+) -> APIRouter:
+    """Binds the operations to `impl`.
+
+    `authenticate` is the dependency for secured operations; `require_roles(roles)` builds the
+    dependency for operations that declare `x-roles` in the spec.
+    """
+    router = APIRouter()
+{% for operation in operations %}
+{% set secured = operation.security != [] %}
+{% set roles = x_roles.get(operation.operationId) %}
+
+    @router.{{ operation.type }}(
+        '{{ operation.path }}',
+        response_model={{ operation.response }},
+        status_code={{ operation.status_code or 200 }},
+{% if operation.additional_responses %}
+        responses={
+{% for status_code, models in operation.additional_responses.items() %}
+            {{ status_code }}: { {% for key, model in models.items() %}'{{ key }}': {{ model }}{% if not loop.last %}, {% endif %}{% endfor %} },
+{% endfor %}
+        },
+{% endif %}
+{% if operation.tags %}
+        tags={{ operation.tags }},
+{% endif %}
+        summary={{ operation.summary.__repr__() }},
+{% if operation.description %}
+        description={{ operation.description.__repr__() }},
+{% endif %}
+        operation_id='{{ operation.operationId }}',
+    )
+    def {{ operation.function_name }}({{ operation.snake_case_arguments }}{% if secured %}{% if operation.snake_case_arguments %}, {% endif %}principal: Any = Depends({% if roles %}require_roles({{ roles }}){% else %}authenticate{% endif %}){% endif %}) -> JSONResponse:
+        result = impl.{{ operation.function_name }}({{ operation.plain_arguments }}{% if secured %}{% if operation.plain_arguments %}, {% endif %}principal=principal{% endif %})
+        return _render(result, {{ operation.status_code or 200 }})
+{% endfor %}
+
+    return router
