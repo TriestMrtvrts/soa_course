@@ -2,8 +2,31 @@ __pycache__/
 *.pyc
 .venv/
 .venv-*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# generated gRPC/protobuf modules (make proto / docker build)
+flight-booking/flight-service/gen/
+flight-booking/booking-service/gen/
+
+# editors and OS metadata
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.log
+
 # generated from openapi/marketplace.yaml at build time (make generate / docker build)
 marketplace-service/app/generated/
 
 # local homework assignment text
 marketplace_homework_openapi_crud-260aefb0-74ad-47f5-9345-2c89d8cb825a.md
+hw3.md

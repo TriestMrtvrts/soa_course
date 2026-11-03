@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package flight.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Flight Service: flights and seat inventory.
+//
+// Authentication: every FlightService call must carry metadata `x-api-key: <key>`.
+// Missing or unknown key -> UNAUTHENTICATED.
+//
+// Error model (standard gRPC status codes):
+//   INVALID_ARGUMENT    - malformed request (bad UUID, IATA code, date, seat_count <= 0, ...)
+//   UNAUTHENTICATED     - no / invalid x-api-key
+//   NOT_FOUND           - flight or reservation does not exist
+//   RESOURCE_EXHAUSTED  - not enough available seats on the flight
+//   FAILED_PRECONDITION - flight is not SCHEDULED; reservation was already released
+//   ALREADY_EXISTS      - booking_id already has a reservation with different parameters
+//   UNAVAILABLE         - transient infrastructure failure (database down), safe to retry
+service FlightService {
+  // Search SCHEDULED flights by route and, optionally, departure date (UTC).
+  rpc SearchFlights(SearchFlightsRequest) returns (SearchFlightsResponse);
+
+  // Get a flight by id. NOT_FOUND if it does not exist.
+  rpc GetFlight(GetFlightRequest) returns (GetFlightResponse);
+
+  // Atomically checks availability, decrements available_seats and creates a reservation.
+  // Idempotent by booking_id: repeating the call with the same booking_id, flight_id and
+  // seat_count returns the existing reservation instead of creating a new one.
+  // Errors: NOT_FOUND, RESOURCE_EXHAUSTED, FAILED_PRECONDITION, ALREADY_EXISTS.
+  rpc ReserveSeats(ReserveSeatsRequest) returns (ReserveSeatsResponse);
+
+  // Releases the ACTIVE reservation of a booking and returns its seats to the flight.
+  // Idempotent: releasing an already RELEASED reservation returns it unchanged.
+  // Errors: NOT_FOUND.
+  rpc ReleaseReservation(ReleaseReservationRequest) returns (ReleaseReservationResponse);
+
+  // Operator operation: change price, schedule or status of a flight.
+  // Errors: NOT_FOUND, INVALID_ARGUMENT.
+  rpc UpdateFlight(UpdateFlightRequest) returns (UpdateFlightResponse);
+}
+
+enum FlightStatus {
+  FLIGHT_STATUS_UNSPECIFIED = 0;
+  FLIGHT_STATUS_SCHEDULED = 1;
+  FLIGHT_STATUS_DEPARTED = 2;
+  FLIGHT_STATUS_CANCELLED = 3;
+  FLIGHT_STATUS_COMPLETED = 4;
+}
+
+enum ReservationStatus {
+  RESERVATION_STATUS_UNSPECIFIED = 0;
+  RESERVATION_STATUS_ACTIVE = 1;
+  RESERVATION_STATUS_RELEASED = 2;
+  RESERVATION_STATUS_EXPIRED = 3;
+}
+
+// Amount of money in minor units (kopecks for RUB) - exact, no floating point.
+message Money {
+  int64 amount_minor = 1;
+  string currency = 2;  // ISO 4217, e.g. "RUB"
+}
+
+// Calendar date without time zone.
+message Date {
+  int32 year = 1;
+  int32 month = 2;
+  int32 day = 3;
+}
+
+message Airport {
+  string iata_code = 1;  // e.g. "SVO"
+  string name = 2;
+  string city = 3;
+}
+
+message Airline {
+  string iata_code = 1;  // e.g. "SU"
+  string name = 2;
+}
+
+message Flight {
+  string id = 1;                                     // UUID
+  string flight_number = 2;                          // airline code + number, e.g. "SU1234"
+  Airline airline = 3;
+  Airport origin = 4;
+  Airport destination = 5;
+  google.protobuf.Timestamp departure_time = 6;
+  google.protobuf.Timestamp arrival_time = 7;
+  int32 total_seats = 8;
+  int32 available_seats = 9;
+  Money price = 10;                                  // price of one seat
+  FlightStatus status = 11;
+}
+
+message SeatReservation {
+  string id = 1;          // UUID
+  string booking_id = 2;  // UUID of the booking in Booking Service
+  string flight_id = 3;
+  int32 seat_count = 4;
+  ReservationStatus status = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message SearchFlightsRequest {
+  string origin = 1;       // IATA code, required
+  string destination = 2;  // IATA code, required
+  Date date = 3;           // optional: departure date (UTC)
+}
+
+message SearchFlightsResponse {
+  repeated Flight flights = 1;
+}
+
+message GetFlightRequest {
+  string flight_id = 1;
+}
+
+message GetFlightResponse {
+  Flight flight = 1;
+}
+
+message ReserveSeatsRequest {
+  string flight_id = 1;
+  int32 seat_count = 2;  // > 0
+  string booking_id = 3; // idempotency key, one reservation per booking
+}
+
+message ReserveSeatsResponse {
+  SeatReservation reservation = 1;
+  int32 available_seats = 2;  // seats left on the flight after the reservation
+}
+
+message ReleaseReservationRequest {
+  string booking_id = 1;
+}
+
+message ReleaseReservationResponse {
+  SeatReservation reservation = 1;
+  int32 available_seats = 2;
+}
+
+message UpdateFlightRequest {
+  string flight_id = 1;
+  // Only the fields that are set are changed.
+  Money price = 2;
+  optional FlightStatus status = 3;
+  google.protobuf.Timestamp departure_time = 4;
+  google.protobuf.Timestamp arrival_time = 5;
+}
+
+message UpdateFlightResponse {
+  Flight flight = 1;
+}

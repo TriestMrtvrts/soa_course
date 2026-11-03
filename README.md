@@ -2,6 +2,7 @@
 
 - **ДЗ №1** — архитектура (C4, домены) и стартовый `catalog-service` с `/health` (порт 8000). Описание ниже, начиная с раздела «1. C4 Container диаграмма».
 - **ДЗ №2** — `marketplace-service`: OpenAPI + CRUD + заказы + JWT + роли (порт 8080). Описание ниже.
+- **ДЗ №3** — `flight-booking/`: Booking + Flight Service, gRPC, Redis Sentinel, retry, circuit breaker (порт 8081). См. [flight-booking/README.md](flight-booking/README.md).
 
 ## ДЗ №2: Marketplace API (OpenAPI + CRUD)
 

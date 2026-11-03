@@ -1,0 +1,4 @@
+# generated from proto/ (scripts/generate_proto.sh, also run in docker build)
+flight-service/gen/
+booking-service/gen/
+.venv*/
