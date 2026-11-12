@@ -1,0 +1,45 @@
+@startuml c4-option-b
+!include <C4/C4_Container>
+LAYOUT_TOP_DOWN()
+title Вариант B. Durable workflow на Temporal — C4 Container
+
+Person(client, "Клиент банка", "Мобильное приложение, SMS, email")
+System_Ext(products, "Продуктовые сервисы", "Платежи, переводы, карты, кредиты")
+System_Ext(push, "Push-провайдеры", "FCM, APNs, RuStore Push, HMS")
+System_Ext(sms, "SMS-агрегаторы A и B", "HTTP/SMPP, DLR")
+System_Ext(email, "Email-провайдеры A и B", "HTTP API")
+
+System_Boundary(np, "Notification Platform — контур критичных уведомлений") {
+  Container(ingest, "Ingest API", "Go, gRPC + REST", "Валидация, StartWorkflow(id = source:event_id)")
+  Container(temporal, "Temporal Cluster", "Temporal Server: frontend, history, matching", "Durable state, таймеры, retry-политики, signals")
+  ContainerDb(cass, "Temporal persistence", "Cassandra, 9+ узлов, 4096 history shards", "История workflow")
+  ContainerDb(es, "Visibility store", "Elasticsearch", "Поиск workflow по атрибутам")
+  Container(wfw, "Delivery Workflow Worker", "Go SDK", "DeliveryWorkflow: план каналов, ожидание сигнала delivered с таймаутом, failover")
+  Container(actw, "Channel Activity Workers", "Go SDK", "SendPush / SendSMS / SendEmail, провайдерный failover и circuit breaker")
+  Container(prefs, "Preference & Contact Service", "Java/Spring + Redis", "Каналы, согласия, контакты")
+  Container(receipts, "Receipt Gateway", "Go, HTTPS", "DLR, webhooks, Ack API -> SignalWorkflow(delivered)")
+  Container(inbox, "Inbox Service", "Go + ScyllaDB", "История уведомлений в приложении")
+  ContainerDb(ch, "Delivery Analytics", "ClickHouse", "События доставки (экспорт из workers), 5 лет")
+  Container(obs, "Observability", "Temporal UI, Prometheus, Grafana, OTel", "SLO и алерты")
+}
+
+Rel(products, ingest, "SendNotification", "gRPC, mTLS")
+Rel(ingest, temporal, "StartWorkflow, WorkflowIdReusePolicy=RejectDuplicate", "gRPC")
+Rel(temporal, cass, "история, таймеры")
+Rel(temporal, es, "visibility")
+Rel(wfw, temporal, "poll workflow tasks", "gRPC")
+Rel(actw, temporal, "poll activity tasks", "gRPC")
+Rel(actw, prefs, "GetPreferences", "gRPC")
+Rel(actw, push, "send", "HTTP/2")
+Rel(actw, sms, "send", "HTTP/SMPP")
+Rel(actw, email, "send", "HTTP")
+Rel(actw, inbox, "запись в inbox")
+Rel(sms, receipts, "DLR", "webhook")
+Rel(client, receipts, "ack push", "HTTPS")
+Rel(receipts, temporal, "SignalWorkflow(delivered)", "gRPC")
+Rel(actw, ch, "события доставки", "Kafka -> ClickHouse")
+Rel(push, client, "push")
+Rel(sms, client, "SMS")
+Rel(email, client, "email")
+SHOW_LEGEND()
+@enduml

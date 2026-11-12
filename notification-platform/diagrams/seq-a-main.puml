@@ -1,0 +1,39 @@
+@startuml seq-a-main
+title Вариант A. Основной сценарий: push доставлен с первой попытки
+autonumber
+participant "Платёжный\nсервис" as P
+participant "Ingest API" as API
+database "State DB\n(PostgreSQL)" as DB
+participant "Outbox Relay" as R
+queue "Kafka" as K
+participant "Delivery\nOrchestrator" as O
+participant "Preference\nService (Redis)" as PS
+participant "Push Sender" as PW
+participant "FCM / APNs" as FCM
+participant "Мобильное\nприложение" as App
+participant "Receipt\nGateway" as G
+
+P -> API : SendNotification(source=payments, event_id=tx-42,\nclass=TRANSACTIONAL, template=debit, user_id)
+API -> DB : BEGIN; INSERT notification (UNIQUE source+event_id);\nINSERT outbox; COMMIT
+API --> P : 202 Accepted {notification_id}
+note right of API : ~10–20 мс. Повтор с тем же event_id\nвернёт тот же notification_id (дубль не создаётся)
+R -> DB : читает outbox (CDC)
+R -> K : notifications.critical (key=user_id)
+K -> O : notification
+O -> PS : GetPreferences(user_id)
+PS --> O : primary=PUSH, plan=[PUSH, SMS, EMAIL], контакты
+O -> DB : UPDATE notification SET state=ATTEMPTING, channel=PUSH,\nversion=v+1 WHERE version=v;\nINSERT attempt#1; INSERT deadline(now+10s)
+O -> K : channel.push.critical {attempt_id}
+O -> K : inbox.write (асинхронно)
+K -> PW : attempt
+PW -> FCM : send(data, collapse_id=notification_id)
+FCM --> PW : 200 message_id
+PW -> K : delivery.events(PROVIDER_ACCEPTED, attempt#1)
+FCM -> App : push
+App -> G : POST /acks {notification_id, attempt_id}
+G -> K : delivery.events(DELIVERED, attempt#1)
+G --> App : 200 {show: true}
+K -> O : DELIVERED
+O -> DB : CAS state=DELIVERED; DELETE deadline
+note over O, DB : Итог: ~2–4 с от события до показа на устройстве
+@enduml

@@ -1,0 +1,45 @@
+@startuml seq-a-failover
+title Вариант A. Failover: push не подтверждён -> SMS (провайдер A недоступен -> провайдер B)
+autonumber
+queue "Kafka" as K
+participant "Delivery\nOrchestrator" as O
+database "State DB" as DB
+participant "Failover\nScheduler" as S
+participant "Push Sender" as PW
+participant "SMS Sender" as SW
+participant "SMS-агрегатор A" as A
+participant "SMS-агрегатор B" as B
+participant "Receipt\nGateway" as G
+participant "Мобильное\nприложение" as App
+
+O -> DB : attempt#1 PUSH, deadline(now+10s)
+O -> K : channel.push.critical
+K -> PW : attempt#1
+PW -> PW : отправлено в FCM (200), но устройство офлайн
+... 10 секунд без ack ...
+S -> DB : SELECT ... FROM deadlines WHERE due_at <= now()\nFOR UPDATE SKIP LOCKED LIMIT 1000
+S -> K : delivery.events(TIMEOUT, attempt#1)
+K -> O : TIMEOUT
+O -> DB : CAS: state ATTEMPTING(PUSH) -> ATTEMPTING(SMS)\nWHERE version=v AND state<>DELIVERED;\nattempt#1=TIMED_OUT; INSERT attempt#2; deadline(now+60s)
+note right of O : Если ack пришёл раньше, CAS не пройдёт:\nSMS не отправится (защита от дублей)
+O -> K : channel.sms.critical {attempt#2}
+K -> SW : attempt#2
+SW -> A : send(client_msg_id=attempt#2)
+A --> SW : 503 / таймаут 2 с
+SW -> SW : retry с backoff (100, 200 мс) -> ошибка;\ncircuit breaker A: CLOSED -> OPEN
+SW -> B : send(client_msg_id=attempt#2)
+B --> SW : 200 accepted
+SW -> K : delivery.events(PROVIDER_ACCEPTED, attempt#2, provider=B)
+B -> G : DLR delivered (client_msg_id=attempt#2)
+G -> K : delivery.events(DELIVERED, attempt#2)
+K -> O : DELIVERED
+O -> DB : CAS state=DELIVERED(channel=SMS); DELETE deadline
+== Позднее подтверждение первого канала ==
+App -> G : POST /acks {attempt#1} (устройство вышло в сеть)
+G -> K : delivery.events(LATE_DELIVERED, attempt#1)
+G --> App : 200 {show: false, reason: delivered_via_sms}
+note right of App : Приложение кладёт уведомление в inbox\nбез баннера: клиент не видит дубль
+K -> O : LATE_DELIVERED -> только запись в историю
+== Все каналы исчерпаны ==
+note over O : Если SMS и email не подтверждены до конца плана:\nstate=FAILED_ALL_CHANNELS -> алерт дежурным,\nуведомление остаётся в inbox
+@enduml

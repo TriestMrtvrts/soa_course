@@ -1,0 +1,34 @@
+@startuml seq-b-main
+title Вариант B. Основной сценарий на Temporal: push доставлен
+autonumber
+participant "Платёжный\nсервис" as P
+participant "Ingest API" as API
+participant "Temporal\nCluster" as T
+participant "DeliveryWorkflow\n(worker)" as W
+participant "Activity\nworkers" as A
+participant "FCM / APNs" as FCM
+participant "Мобильное\nприложение" as App
+participant "Receipt\nGateway" as G
+
+P -> API : SendNotification(source, event_id, class, user_id)
+API -> T : StartWorkflow(id="payments:tx-42",\nreuse=RejectDuplicate)
+T --> API : run_id (или WorkflowExecutionAlreadyStarted -> дубль)
+API --> P : 202 Accepted {notification_id}
+T -> W : workflow task
+W -> T : ExecuteActivity(GetPreferences)
+T -> A : activity task
+A --> T : plan=[PUSH, SMS, EMAIL]
+T -> W : result
+W -> T : ExecuteActivity(SendPush, attempt=1)
+T -> A : activity task
+A -> FCM : send(collapse_id=notification_id)
+FCM --> A : 200
+A --> T : completed
+W -> T : await Signal("delivered") с таймером 10 с
+FCM -> App : push
+App -> G : POST /acks
+G -> T : SignalWorkflow("payments:tx-42", delivered{attempt=1})
+T -> W : signal
+W -> T : CompleteWorkflow(DELIVERED via PUSH)
+note over T : Каждый шаг записывается в историю (Cassandra):\n~12–15 событий на уведомление
+@enduml

@@ -1,0 +1,33 @@
+@startuml seq-b-failover
+title Вариант B. Failover на Temporal: таймер истёк -> SMS
+autonumber
+participant "Temporal\nCluster" as T
+participant "DeliveryWorkflow\n(worker)" as W
+participant "Activity\nworkers" as A
+participant "SMS-агрегатор A" as SA
+participant "SMS-агрегатор B" as SB
+participant "Receipt\nGateway" as G
+participant "Мобильное\nприложение" as App
+
+W -> T : await Signal("delivered"), timer 10 с
+... 10 секунд без сигнала (устройство офлайн) ...
+T -> W : TimerFired
+W -> T : ExecuteActivity(SendSMS, attempt=2,\nRetryPolicy{max=3, backoff=100ms x2})
+T -> A : activity task
+A -> SA : send(client_msg_id=attempt#2)
+SA --> A : 503
+A -> SB : send(client_msg_id=attempt#2)\n(провайдерный failover внутри activity)
+SB --> A : 200
+A --> T : completed(provider=B)
+W -> T : await Signal("delivered"), timer 60 с
+SB -> G : DLR delivered
+G -> T : SignalWorkflow(delivered{attempt=2})
+T -> W : signal
+W -> T : CompleteWorkflow(DELIVERED via SMS)
+== Позднее подтверждение push ==
+App -> G : POST /acks {attempt#1}
+G -> T : SignalWorkflow(...)
+T --> G : NotFound (workflow завершён)
+G --> App : 200 {show: false}
+note over W : Если activity-воркер упал во время SendSMS,\nTemporal перезапустит activity по таймауту.\nЗащита от двойной SMS — client_msg_id у провайдера
+@enduml

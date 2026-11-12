@@ -1,0 +1,25 @@
+@startuml state-notification
+title Жизненный цикл критичного уведомления (выбранный вариант A)
+[*] --> ACCEPTED : Ingest API\n(INSERT, UNIQUE source+event_id)
+ACCEPTED --> ROUTING : событие из Kafka
+ROUTING --> ATTEMPTING : план каналов построен\n(настройки + контакты)
+ROUTING --> FAILED_ALL_CHANNELS : нет ни одного контакта
+state ATTEMPTING {
+  [*] --> SENDING
+  SENDING --> AWAITING_RECEIPT : провайдер принял
+  SENDING --> SENDING : ошибка провайдера ->\nretry / другой провайдер канала
+  AWAITING_RECEIPT --> [*]
+}
+ATTEMPTING --> DELIVERED : ack приложения / DLR delivered /\nemail accepted (последний канал)
+ATTEMPTING --> ATTEMPTING : TIMEOUT или FAILED ->\nследующий канал плана
+ATTEMPTING --> FAILED_ALL_CHANNELS : план исчерпан
+ATTEMPTING --> EXPIRED : истёк TTL уведомления\n(например, OTP 5 мин)
+DELIVERED --> [*]
+FAILED_ALL_CHANNELS --> [*] : алерт + inbox
+EXPIRED --> [*]
+note right of ATTEMPTING
+  Каждый переход — UPDATE ... WHERE version = :v
+  (compare-and-set). Повторные и поздние события
+  не меняют финальное состояние.
+end note
+@enduml
